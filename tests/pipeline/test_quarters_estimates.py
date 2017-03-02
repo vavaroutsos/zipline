@@ -614,8 +614,8 @@ class WithEstimateMultipleQuarters(WithEstimates):
             EVENT_DATE_FIELD_NAME: [pd.Timestamp('2015-01-10'),
                                     pd.Timestamp('2015-01-20')],
             'estimate': [1., 2.],
-            FISCAL_QUARTER_FIELD_NAME: [1, 2],
-            FISCAL_YEAR_FIELD_NAME: [2015, 2015]
+            FISCAL_QUARTER_FIELD_NAME: [1.0, 2.0],
+            FISCAL_YEAR_FIELD_NAME: [2015.0, 2015.0]
         })
 
     @classmethod
@@ -817,8 +817,8 @@ class WithVaryingNumEstimates(WithEstimates):
                                     pd.Timestamp('2015-01-12'),
                                     pd.Timestamp('2015-01-20')],
             'estimate': [11., 12., 21.] * 2,
-            FISCAL_QUARTER_FIELD_NAME: [1, 1, 2] * 2,
-            FISCAL_YEAR_FIELD_NAME: [2015] * 6
+            FISCAL_QUARTER_FIELD_NAME: [1.0, 1.0, 2.0] * 2,
+            FISCAL_YEAR_FIELD_NAME: [2015.0] * 6
         })
 
     @classmethod
@@ -967,8 +967,8 @@ class WithEstimateWindows(WithEstimates):
                  pd.Timestamp('2015-02-10'),
                  pd.Timestamp('2015-04-01')],
             'estimate': [100., 101.] + [200., 201.] + [400],
-            FISCAL_QUARTER_FIELD_NAME: [1] * 2 + [2] * 2 + [4],
-            FISCAL_YEAR_FIELD_NAME: 2015,
+            FISCAL_QUARTER_FIELD_NAME: [1.0] * 2 + [2.0] * 2 + [4.0],
+            FISCAL_YEAR_FIELD_NAME: 2015.0,
             SID_FIELD_NAME: 0,
         })
 
@@ -982,8 +982,8 @@ class WithEstimateWindows(WithEstimates):
                 [pd.Timestamp('2015-01-22'), pd.Timestamp('2015-01-22'),
                  pd.Timestamp('2015-02-05'), pd.Timestamp('2015-02-05')],
             'estimate': [110., 111.] + [310., 311.],
-            FISCAL_QUARTER_FIELD_NAME: [1] * 2 + [3] * 2,
-            FISCAL_YEAR_FIELD_NAME: 2015,
+            FISCAL_QUARTER_FIELD_NAME: [1.0] * 2 + [3.0] * 2,
+            FISCAL_YEAR_FIELD_NAME: 2015.0,
             SID_FIELD_NAME: 10
         })
 
@@ -1000,8 +1000,8 @@ class WithEstimateWindows(WithEstimates):
                  pd.Timestamp('2015-02-10'),
                  pd.Timestamp('2015-02-10')],
             'estimate': [120., 121.] + [220., 221.],
-            FISCAL_QUARTER_FIELD_NAME: [1] * 2 + [2] * 2,
-            FISCAL_YEAR_FIELD_NAME: 2015,
+            FISCAL_QUARTER_FIELD_NAME: [1.0] * 2 + [2.0] * 2,
+            FISCAL_YEAR_FIELD_NAME: 2015.0,
             SID_FIELD_NAME: 20
         })
         concatted = pd.concat([sid_0_timeline,
@@ -1304,8 +1304,8 @@ class WithSplitAdjustedWindows(WithEstimateWindows):
                  pd.Timestamp('2015-01-20'),
                  pd.Timestamp('2015-01-20')],
             'estimate': [130., 131., 230., 231.],
-            FISCAL_QUARTER_FIELD_NAME: [1] * 2 + [2] * 2,
-            FISCAL_YEAR_FIELD_NAME: 2015,
+            FISCAL_QUARTER_FIELD_NAME: [1.0] * 2 + [2.0] * 2,
+            FISCAL_YEAR_FIELD_NAME: 2015.0,
             SID_FIELD_NAME: 30
         })
 
@@ -1320,8 +1320,8 @@ class WithSplitAdjustedWindows(WithEstimateWindows):
             EVENT_DATE_FIELD_NAME: [pd.Timestamp('2015-01-09'),
                                     pd.Timestamp('2015-02-10')],
             'estimate': [140., 240.],
-            FISCAL_QUARTER_FIELD_NAME: [1, 2],
-            FISCAL_YEAR_FIELD_NAME: 2015,
+            FISCAL_QUARTER_FIELD_NAME: [1.0, 2.0],
+            FISCAL_YEAR_FIELD_NAME: 2015.0,
             SID_FIELD_NAME: 40
         })
 
@@ -1334,8 +1334,8 @@ class WithSplitAdjustedWindows(WithEstimateWindows):
             EVENT_DATE_FIELD_NAME: [pd.Timestamp('2015-01-09'),
                                     pd.Timestamp('2015-02-10')],
             'estimate': [150., 250.],
-            FISCAL_QUARTER_FIELD_NAME: [1, 2],
-            FISCAL_YEAR_FIELD_NAME: 2015,
+            FISCAL_QUARTER_FIELD_NAME: [1.0, 2.0],
+            FISCAL_YEAR_FIELD_NAME: 2015.0,
             SID_FIELD_NAME: 50
         })
 
@@ -1893,8 +1893,8 @@ class WithSplitAdjustedMultipleEstimateColumns(WithEstimates):
                  pd.Timestamp('2015-01-12')],
             'estimate1': [1100., 1200.],
             'estimate2': [2100., 2200.],
-            FISCAL_QUARTER_FIELD_NAME: [1, 2],
-            FISCAL_YEAR_FIELD_NAME: 2015,
+            FISCAL_QUARTER_FIELD_NAME: [1.0, 2.0],
+            FISCAL_YEAR_FIELD_NAME: 2015.0,
             SID_FIELD_NAME: 0,
         })
 
@@ -1910,8 +1910,8 @@ class WithSplitAdjustedMultipleEstimateColumns(WithEstimates):
                  pd.Timestamp('2015-01-11')],
             'estimate1': [1110., 1210.],
             'estimate2': [2110., 2210.],
-            FISCAL_QUARTER_FIELD_NAME: [1, 2],
-            FISCAL_YEAR_FIELD_NAME: 2015,
+            FISCAL_QUARTER_FIELD_NAME: [1.0, 2.0],
+            FISCAL_YEAR_FIELD_NAME: 2015.0,
             SID_FIELD_NAME: 1,
         })
         return pd.concat([sid_0_events, sid_1_events])
@@ -2232,8 +2232,8 @@ class WithAdjustmentBoundaries(WithEstimates):
             TS_FIELD_NAME: cls.test_start_date,
             EVENT_DATE_FIELD_NAME: pd.Timestamp('2015-01-09'),
             'estimate': 10.,
-            FISCAL_QUARTER_FIELD_NAME: 1,
-            FISCAL_YEAR_FIELD_NAME: 2015,
+            FISCAL_QUARTER_FIELD_NAME: 1.0,
+            FISCAL_YEAR_FIELD_NAME: 2015.0,
             SID_FIELD_NAME: 0,
         }, index=[0])
 
@@ -2242,8 +2242,8 @@ class WithAdjustmentBoundaries(WithEstimates):
             # event date on first date of index
             EVENT_DATE_FIELD_NAME: cls.test_start_date,
             'estimate': 11.,
-            FISCAL_QUARTER_FIELD_NAME: 1,
-            FISCAL_YEAR_FIELD_NAME: 2015,
+            FISCAL_QUARTER_FIELD_NAME: 1.0,
+            FISCAL_YEAR_FIELD_NAME: 2015.0,
             SID_FIELD_NAME: 1,
         }, index=[0])
 
@@ -2252,8 +2252,8 @@ class WithAdjustmentBoundaries(WithEstimates):
             TS_FIELD_NAME: cls.test_end_date,
             EVENT_DATE_FIELD_NAME: cls.test_end_date + timedelta(days=1),
             'estimate': 12.,
-            FISCAL_QUARTER_FIELD_NAME: 1,
-            FISCAL_YEAR_FIELD_NAME: 2015,
+            FISCAL_QUARTER_FIELD_NAME: 1.0,
+            FISCAL_YEAR_FIELD_NAME: 2015.0,
             SID_FIELD_NAME: 2,
         }, index=[0])
 
@@ -2261,8 +2261,8 @@ class WithAdjustmentBoundaries(WithEstimates):
             TS_FIELD_NAME: cls.test_end_date - timedelta(days=1),
             EVENT_DATE_FIELD_NAME: cls.test_end_date,
             'estimate': 13.,
-            FISCAL_QUARTER_FIELD_NAME: 1,
-            FISCAL_YEAR_FIELD_NAME: 2015,
+            FISCAL_QUARTER_FIELD_NAME: 1.0,
+            FISCAL_YEAR_FIELD_NAME: 2015.0,
             SID_FIELD_NAME: 3,
         }, index=[0])
 
@@ -2271,8 +2271,8 @@ class WithAdjustmentBoundaries(WithEstimates):
             TS_FIELD_NAME: cls.test_end_date - timedelta(days=1),
             EVENT_DATE_FIELD_NAME: cls.test_end_date - timedelta(days=1),
             'estimate': 14.,
-            FISCAL_QUARTER_FIELD_NAME: 1,
-            FISCAL_YEAR_FIELD_NAME: 2015,
+            FISCAL_QUARTER_FIELD_NAME: 1.0,
+            FISCAL_YEAR_FIELD_NAME: 2015.0,
             SID_FIELD_NAME: 4,
         }, index=[0])
 
