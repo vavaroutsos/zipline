@@ -996,8 +996,13 @@ class AssetFinder(object):
 
         fields = (fc_cols.exchange,)
 
-        return sa.select(fields).where(
-            fc_cols.root_symbol == root_symbol).execute().fetchone()[0]
+        exchange_tuple = sa.select(fields).where(
+            fc_cols.root_symbol == root_symbol).execute().fetchone()
+
+        if exchange_tuple is not None:
+            return exchange_tuple[0]
+        else:
+            raise SymbolNotFound(symbol=root_symbol)
 
     def get_ordered_contracts(self, root_symbol):
         try:
