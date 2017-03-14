@@ -1923,6 +1923,7 @@ class LastInGroupSortingTestCase(BlazeToPipelineTestCase):
             ('other', 'value'),
         )
 
+
 class MiscTestCase(ZiplineTestCase):
     def test_exprdata_repr(self):
         strd = set()
