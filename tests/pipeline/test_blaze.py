@@ -1876,6 +1876,53 @@ class BlazeToPipelineTestCase(WithAssetFinder, ZiplineTestCase):
         self._test_checkpoints(checkpoints)
 
 
+class LastInGroupSortingTestCase(BlazeToPipelineTestCase):
+    @classmethod
+    def init_class_fixtures(cls):
+        super(LastInGroupSortingTestCase, cls).init_class_fixtures()
+        cls.dates = pd.DatetimeIndex([
+            pd.Timestamp('2014-01-02'),
+            pd.Timestamp('2014-01-03'),
+            pd.Timestamp('2014-01-06'),
+        ])
+
+    def test_id_take_last_in_group_sorted(self):
+        """
+        output (expected):
+
+                    other  value
+        2014-01-02    NaN    NaN
+        2014-01-03    NaN    NaN
+        2014-01-06      3      3
+         """
+        T = pd.Timestamp
+        df = pd.DataFrame(
+            columns=['asof_date',        'timestamp', 'other', 'value'],
+            data=[
+                # asof-dates are flipped in terms of order so that if we
+                # don't sort on asof-date before getting the last in group,
+                # we will get the wrong result.
+                [T('2014-01-03'), T('2014-01-04 00'), 3, 3],
+                [T('2014-01-02'), T('2014-01-04 00'), 2, 2],
+            ],
+        )
+        fields = OrderedDict(self.macro_dshape.measure.fields)
+        fields['other'] = fields['value']
+        expected = pd.DataFrame(
+            data=[[np.nan, np.nan],   # 2014-01-02
+                  [np.nan,      np.nan],   # 2014-01-03
+                  [3,      3]],  # 2014-01-06
+            columns=['other', 'value'],
+            index=self.dates,
+        )
+        self._test_id_macro(
+            df,
+            var * Record(fields),
+            expected,
+            self.asset_finder,
+            ('other', 'value'),
+        )
+
 class MiscTestCase(ZiplineTestCase):
     def test_exprdata_repr(self):
         strd = set()
