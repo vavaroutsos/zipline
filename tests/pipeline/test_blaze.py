@@ -776,8 +776,9 @@ class BlazeToPipelineTestCase(WithAssetFinder, ZiplineTestCase):
             check_dtype=False,
         )
 
-    def _test_id_macro(self, df, dshape, expected, finder, add):
-        dates = self.dates
+    def _test_id_macro(self, df, dshape, expected, finder, add, dates=None):
+        if dates is None:
+            dates = self.dates
         expr = bz.data(df, name='expr', dshape=dshape)
         loader = BlazeLoader()
         ds = from_blaze(
@@ -1875,29 +1876,30 @@ class BlazeToPipelineTestCase(WithAssetFinder, ZiplineTestCase):
 
         self._test_checkpoints(checkpoints)
 
-
-class LastInGroupSortingTestCase(BlazeToPipelineTestCase):
-    @classmethod
-    def init_class_fixtures(cls):
-        super(LastInGroupSortingTestCase, cls).init_class_fixtures()
-        cls.dates = pd.DatetimeIndex([
-            pd.Timestamp('2014-01-02'),
-            pd.Timestamp('2014-01-03'),
-            pd.Timestamp('2014-01-06'),
-        ])
-
     def test_id_take_last_in_group_sorted(self):
         """
+        input
+        asof_date     timestamp     other  value
+        2014-01-02    2014-01-04 00     3      3
+        2014-01-03    2014-01-04 00     2      2
+
         output (expected):
 
                     other  value
         2014-01-02    NaN    NaN
         2014-01-03    NaN    NaN
         2014-01-06      3      3
-         """
+        """
+
+        dates = pd.DatetimeIndex([
+            pd.Timestamp('2014-01-02'),
+            pd.Timestamp('2014-01-03'),
+            pd.Timestamp('2014-01-06'),
+        ])
+
         T = pd.Timestamp
         df = pd.DataFrame(
-            columns=['asof_date',        'timestamp', 'other', 'value'],
+            columns=['asof_date', 'timestamp', 'other', 'value'],
             data=[
                 # asof-dates are flipped in terms of order so that if we
                 # don't sort on asof-date before getting the last in group,
@@ -1910,10 +1912,10 @@ class LastInGroupSortingTestCase(BlazeToPipelineTestCase):
         fields['other'] = fields['value']
         expected = pd.DataFrame(
             data=[[np.nan, np.nan],   # 2014-01-02
-                  [np.nan,      np.nan],   # 2014-01-03
-                  [3,      3]],  # 2014-01-06
+                  [np.nan, np.nan],   # 2014-01-03
+                  [3,      3]],       # 2014-01-06
             columns=['other', 'value'],
-            index=self.dates,
+            index=dates,
         )
         self._test_id_macro(
             df,
@@ -1921,6 +1923,7 @@ class LastInGroupSortingTestCase(BlazeToPipelineTestCase):
             expected,
             self.asset_finder,
             ('other', 'value'),
+            dates=dates,
         )
 
 
