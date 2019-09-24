@@ -7,14 +7,11 @@ import warnings
 from contextlib2 import ExitStack
 import click
 import pandas as pd
+from trading_calendars import get_calendar
 from toolz import curry, complement, take
 
-from ..us_equity_pricing import (
-    BcolzDailyBarReader,
-    BcolzDailyBarWriter,
-    SQLiteAdjustmentReader,
-    SQLiteAdjustmentWriter,
-)
+from ..adjustments import SQLiteAdjustmentReader, SQLiteAdjustmentWriter
+from ..bcolz_daily_bars import BcolzDailyBarReader, BcolzDailyBarWriter
 from ..minute_bars import (
     BcolzMinuteBarReader,
     BcolzMinuteBarWriter,
@@ -30,7 +27,6 @@ from zipline.utils.compat import mappingproxy
 from zipline.utils.input_validation import ensure_timestamp, optionally
 import zipline.utils.paths as pth
 from zipline.utils.preprocess import preprocess
-from zipline.utils.calendars import get_calendar
 
 
 def asset_db_path(bundle_name, timestr, environ=None, db_version=None):
@@ -248,7 +244,7 @@ def _make_bundle_core():
                   The daily bar writer to write into.
               adjustment_writer : SQLiteAdjustmentWriter
                   The adjustment db writer to write into.
-              calendar : zipline.utils.calendars.TradingCalendar
+              calendar : trading_calendars.TradingCalendar
                   The trading calendar to ingest for.
               start_session : pd.Timestamp
                   The first session of data to ingest.
@@ -424,7 +420,6 @@ def _make_bundle_core():
                         wd.getpath(*adjustment_db_relative(
                             name, timestr, environ=environ)),
                         BcolzDailyBarReader(daily_bars_path),
-                        calendar.all_sessions,
                         overwrite=True,
                     )
                 )
@@ -617,5 +612,6 @@ def _make_bundle_core():
         return cleaned
 
     return BundleCore(bundles, register, unregister, ingest, load, clean)
+
 
 bundles, register, unregister, ingest, load, clean = _make_bundle_core()

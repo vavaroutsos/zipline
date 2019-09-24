@@ -1,5 +1,8 @@
 """
 Mixins classes for use with Filters and Factors.
+
+The mixin classes inherit from Term to ensure they appear before
+Term in the MRO of any class using the mixin
 """
 from textwrap import dedent
 
@@ -16,7 +19,7 @@ from zipline.errors import (
     UnsupportedDataType,
     NoFurtherDataError,
 )
-from zipline.utils.control_flow import nullctx
+from zipline.utils.context_tricks import nop_context
 from zipline.utils.input_validation import expect_types
 from zipline.utils.sharedoc import (
     format_docstring,
@@ -34,7 +37,7 @@ from .sentinels import NotSpecified
 from .term import Term
 
 
-class PositiveWindowLengthMixin(object):
+class PositiveWindowLengthMixin(Term):
     """
     Validation mixin enforcing that a Term gets a positive WindowLength
     """
@@ -44,7 +47,7 @@ class PositiveWindowLengthMixin(object):
             raise WindowLengthNotPositive(window_length=self.window_length)
 
 
-class SingleInputMixin(object):
+class SingleInputMixin(Term):
     """
     Validation mixin enforcing that a Term gets a length-1 inputs list.
     """
@@ -61,7 +64,7 @@ class SingleInputMixin(object):
             )
 
 
-class StandardOutputs(object):
+class StandardOutputs(Term):
     """
     Validation mixin enforcing that a Term cannot produce non-standard outputs.
     """
@@ -77,7 +80,7 @@ class StandardOutputs(object):
             )
 
 
-class RestrictedDTypeMixin(object):
+class RestrictedDTypeMixin(Term):
     """
     Validation mixin enforcing that a term has a specific dtype.
     """
@@ -97,7 +100,7 @@ class RestrictedDTypeMixin(object):
             )
 
 
-class CustomTermMixin(object):
+class CustomTermMixin(Term):
     """
     Mixin for user-defined rolling-window Terms.
 
@@ -106,7 +109,7 @@ class CustomTermMixin(object):
 
     Used by CustomFactor, CustomFilter, CustomClassifier, etc.
     """
-    ctx = nullctx()
+    ctx = nop_context
 
     def __new__(cls,
                 inputs=NotSpecified,
@@ -144,7 +147,11 @@ class CustomTermMixin(object):
         """
         Override this method with a function that writes a value into `out`.
         """
-        raise NotImplementedError()
+        raise NotImplementedError(
+            "{name} must define a compute method".format(
+                name=type(self).__name__
+            )
+        )
 
     def _allocate_output(self, windows, shape):
         """
@@ -215,13 +222,41 @@ class CustomTermMixin(object):
                 out[idx][out_mask] = out_row
         return out
 
-    def short_repr(self):
-        return type(self).__name__ + '(%d)' % self.window_length
+    def graph_repr(self):
+        """Short repr to use when rendering Pipeline graphs."""
+        # Graphviz interprets `\l` as "divide label into lines, left-justified"
+        return type(self).__name__ + ':\\l  window_length: %d\\l' % \
+            self.window_length
 
 
 class LatestMixin(SingleInputMixin):
     """
-    Mixin for behavior shared by Custom{Factor,Filter,Classifier}.
+    Common behavior for :attr:`zipline.pipeline.data.BoundColumn.latest`.
+
+    Given a :class:`~zipline.pipeline.data.DataSet` named ``MyData`` with a
+    column ``col`` of numeric dtype, the following expression:
+
+    .. code-block:: python
+
+       factor = MyData.col.latest
+
+    is equivalent to:
+
+    .. code-block:: python
+
+       class Latest(CustomFactor):
+           inputs = [MyData.col]
+           window_length = 1
+
+           def compute(self, today, assets, out, data):
+               out[:] = data[-1]
+
+       factor = Latest()
+
+    The behavior is the same for columns of boolean or string dtype, except the
+    resulting expression will be a :class:`~zipline.pipeline.CustomFilter` for
+    boolean columns, and the resulting object will be a
+    :class:`~zipline.pipeline.CustomClassifier` for string or integer columns.
     """
     window_length = 1
 
@@ -239,6 +274,9 @@ class LatestMixin(SingleInputMixin):
                     actual=self.inputs[0].dtype,
                 )
             )
+
+    def graph_repr(self):
+        return "Latest"
 
 
 class AliasedMixin(SingleInputMixin):
@@ -273,13 +311,14 @@ class AliasedMixin(SingleInputMixin):
         return inputs[0]
 
     def __repr__(self):
-        return '{type}({inner_type}(...), name={name!r})'.format(
+        return '{type}({inner}, name={name!r})'.format(
             type=type(self).__name__,
-            inner_type=type(self.inputs[0]).__name__,
+            inner=self.inputs[0].recursive_repr(),
             name=self.name,
         )
 
-    def short_repr(self):
+    def graph_repr(self):
+        """Short repr to use when rendering Pipeline graphs."""
         return self.name
 
     @classmethod
@@ -386,7 +425,7 @@ class DownsampledMixin(StandardOutputs):
         try:
             current_start_pos = all_dates.get_loc(start_date) - min_extra_rows
             if current_start_pos < 0:
-                raise NoFurtherDataError(
+                raise NoFurtherDataError.from_lookback_window(
                     initial_message="Insufficient data to compute Pipeline:",
                     first_date=all_dates[0],
                     lookback_start=start_date,

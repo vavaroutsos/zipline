@@ -23,19 +23,32 @@ from numpy import (
     rot90,
     sum as np_sum
 )
-from numpy.random import randn, seed as random_seed
+from numpy.random import choice, randn, seed as random_seed
 import pandas as pd
 
 from zipline.errors import BadPercentileBounds
 from zipline.pipeline import Filter, Factor, Pipeline
 from zipline.pipeline.classifiers import Classifier
+from zipline.pipeline.domain import US_EQUITIES
 from zipline.pipeline.factors import CustomFactor
-from zipline.pipeline.filters import All, Any, AtLeastN, StaticAssets
+from zipline.pipeline.filters import (
+    All,
+    AllPresent,
+    Any,
+    AtLeastN,
+    StaticAssets,
+    StaticSids,
+)
 from zipline.testing import parameter_space, permute_rows, ZiplineTestCase
 from zipline.testing.fixtures import WithSeededRandomPipelineEngine
 from zipline.testing.predicates import assert_equal
-from zipline.utils.numpy_utils import float64_dtype, int64_dtype
-from .base import BasePipelineTestCase, with_default_shape
+from zipline.utils.numpy_utils import (
+    datetime64ns_dtype,
+    float64_dtype,
+    int64_dtype,
+    object_dtype,
+)
+from .base import BaseUSEquityPipelineTestCase, with_default_shape
 
 
 def rowwise_rank(array, mask=None):
@@ -43,8 +56,8 @@ def rowwise_rank(array, mask=None):
     Take a 2D array and return the 0-indexed sorted position of each element in
     the array for each row.
 
-    Example
-    -------
+    Examples
+    --------
     In [5]: data
     Out[5]:
     array([[-0.141, -1.103, -1.0171,  0.7812,  0.07  ],
@@ -72,6 +85,18 @@ class SomeFactor(Factor):
     window_length = 0
 
 
+class SomeFilter(Filter):
+    inputs = ()
+    window_length = 0
+    missing_value = False
+
+
+class SomeDatetimeFactor(Factor):
+    dtype = datetime64ns_dtype
+    inputs = ()
+    window_length = 0
+
+
 class SomeOtherFactor(Factor):
     dtype = float64_dtype
     inputs = ()
@@ -90,13 +115,19 @@ class Mask(Filter):
     window_length = 0
 
 
-class FilterTestCase(BasePipelineTestCase):
+class FilterTestCase(BaseUSEquityPipelineTestCase):
 
     def init_instance_fixtures(self):
         super(FilterTestCase, self).init_instance_fixtures()
         self.f = SomeFactor()
         self.g = SomeOtherFactor()
         self.c = SomeClassifier()
+        self.datetime_f = SomeDatetimeFactor()
+
+        self.factors_by_dtype_name = {
+            'float64': self.f,
+            'datetime64[ns]': self.datetime_f,
+        }
 
     @with_default_shape
     def randn_data(self, seed, shape):
@@ -373,6 +404,153 @@ class FilterTestCase(BasePipelineTestCase):
             mask=self.build_mask(self.ones_mask()),
         )
 
+    def test_all_present_float_factor_input(self):
+        """Test float factor input to `AllPresent`
+        """
+        class SomeWindowSafeFactor(Factor):
+            dtype = float64_dtype
+            inputs = ()
+            window_length = 0
+            window_safe = True
+
+        input_factor = SomeWindowSafeFactor()
+
+        shape = (10, 6)
+        data = self.randn_data(seed=10, shape=shape)
+        data[eye(*shape, dtype=bool)] = input_factor.missing_value
+
+        expected_3 = array([[1, 0, 0, 0, 1, 1],
+                            [1, 1, 0, 0, 0, 1],
+                            [1, 1, 1, 0, 0, 0],
+                            [1, 1, 1, 1, 0, 0],
+                            [1, 1, 1, 1, 1, 0],
+                            [1, 1, 1, 1, 1, 1],
+                            [1, 1, 1, 1, 1, 1]], dtype=bool)
+
+        expected_4 = array([[0, 0, 0, 0, 1, 1],
+                            [1, 0, 0, 0, 0, 1],
+                            [1, 1, 0, 0, 0, 0],
+                            [1, 1, 1, 0, 0, 0],
+                            [1, 1, 1, 1, 0, 0],
+                            [1, 1, 1, 1, 1, 0],
+                            [1, 1, 1, 1, 1, 1]], dtype=bool)
+        self.check_terms(
+            terms={
+                '3': AllPresent([input_factor], window_length=3),
+                '4': AllPresent([input_factor], window_length=4),
+            },
+            expected={
+                '3': expected_3,
+                '4': expected_4,
+            },
+            initial_workspace={input_factor: data},
+            mask=self.build_mask(ones(shape=shape))
+        )
+
+    def test_all_present_int_factor_input(self):
+        """Test int factor input to `AllPresent`
+        """
+        class SomeWindowSafeIntFactor(Factor):
+            dtype = int64_dtype
+            inputs = ()
+            window_length = 0
+            window_safe = True
+            missing_value = 0
+
+        input_factor = SomeWindowSafeIntFactor()
+
+        shape = (10, 6)
+        data = choice(range(1, 5), size=shape, replace=True)
+        data[eye(*shape, dtype=bool)] = input_factor.missing_value
+
+        expected_3 = array([[1, 0, 0, 0, 1, 1],
+                            [1, 1, 0, 0, 0, 1],
+                            [1, 1, 1, 0, 0, 0],
+                            [1, 1, 1, 1, 0, 0],
+                            [1, 1, 1, 1, 1, 0],
+                            [1, 1, 1, 1, 1, 1],
+                            [1, 1, 1, 1, 1, 1]], dtype=bool)
+
+        expected_4 = array([[0, 0, 0, 0, 1, 1],
+                            [1, 0, 0, 0, 0, 1],
+                            [1, 1, 0, 0, 0, 0],
+                            [1, 1, 1, 0, 0, 0],
+                            [1, 1, 1, 1, 0, 0],
+                            [1, 1, 1, 1, 1, 0],
+                            [1, 1, 1, 1, 1, 1]], dtype=bool)
+        self.check_terms(
+            terms={
+                '3': AllPresent([input_factor], window_length=3),
+                '4': AllPresent([input_factor], window_length=4),
+            },
+            expected={
+                '3': expected_3,
+                '4': expected_4,
+            },
+            initial_workspace={input_factor: data},
+            mask=self.build_mask(ones(shape=shape))
+        )
+
+    def test_all_present_classifier_input(self):
+        """Test classifier factor input to `AllPresent`
+        """
+        class SomeWindowSafeStringClassifier(Classifier):
+            dtype = object_dtype
+            inputs = ()
+            window_length = 0
+            missing_value = ''
+            window_safe = True
+
+        input_factor = SomeWindowSafeStringClassifier()
+
+        shape = (10, 6)
+        data = choice(
+            array(['a', 'e', 'i', 'o', 'u'], dtype=object_dtype),
+            size=shape,
+            replace=True
+        )
+        data[eye(*shape, dtype=bool)] = input_factor.missing_value
+
+        expected_3 = array([[1, 0, 0, 0, 1, 1],
+                            [1, 1, 0, 0, 0, 1],
+                            [1, 1, 1, 0, 0, 0],
+                            [1, 1, 1, 1, 0, 0],
+                            [1, 1, 1, 1, 1, 0],
+                            [1, 1, 1, 1, 1, 1],
+                            [1, 1, 1, 1, 1, 1]], dtype=bool)
+
+        expected_4 = array([[0, 0, 0, 0, 1, 1],
+                            [1, 0, 0, 0, 0, 1],
+                            [1, 1, 0, 0, 0, 0],
+                            [1, 1, 1, 0, 0, 0],
+                            [1, 1, 1, 1, 0, 0],
+                            [1, 1, 1, 1, 1, 0],
+                            [1, 1, 1, 1, 1, 1]], dtype=bool)
+
+        self.check_terms(
+            terms={
+                '3': AllPresent([input_factor], window_length=3),
+                '4': AllPresent([input_factor], window_length=4),
+            },
+            expected={
+                '3': expected_3,
+                '4': expected_4,
+            },
+            initial_workspace={input_factor: data},
+            mask=self.build_mask(ones(shape=shape))
+        )
+
+    def test_all_present_filter_input(self):
+        """Test error is raised when filter factor is input to `AllPresent`
+        """
+        with self.assertRaises(TypeError) as err:
+            AllPresent([Mask()], window_length=4)
+
+        self.assertEqual(
+            "Input to filter `AllPresent` cannot be a Filter.",
+            str(err.exception)
+        )
+
     def test_all(self):
 
         data = array([[1, 1, 1, 1, 1, 1],
@@ -586,6 +764,21 @@ class FilterTestCase(BasePipelineTestCase):
             mask=self.build_mask(self.ones_mask()),
         )
 
+    def test_numerical_expression_filters_are_window_safe(self):
+        class TestFactor(CustomFactor):
+            inputs = ()
+            window_length = 3
+
+            def compute(self, today, assets, out):
+                raise AssertionError("Never called")
+
+        # Factors are not window safe by default.
+        factor = TestFactor()
+        self.assertFalse(factor.window_safe)
+
+        filter_ = TestFactor() > 3
+        self.assertTrue(filter_.window_safe)
+
     @parameter_space(
         dtype=('float64', 'datetime64[ns]'),
         seed=(1, 2, 3),
@@ -609,7 +802,7 @@ class FilterTestCase(BasePipelineTestCase):
                                           [0, 0, 0, 0, 1, 1, 1, 1],
                                           [0, 0, 0, 0, 0, 0, 0, 0],
                                           [0, 0, 0, 0, 0, 0, 0, 0]])
-        f = self.f
+        f = self.factors_by_dtype_name[dtype]
         c = self.c
         self.check_terms(
             terms={
@@ -679,7 +872,7 @@ class FilterTestCase(BasePipelineTestCase):
                                           [0, 0, 0, 0, 0, 0, 0, 0],
                                           [0, 0, 0, 0, 0, 0, 0, 0]])
 
-        f = self.f
+        f = self.factors_by_dtype_name[dtype]
         c = self.c
 
         self.check_terms(
@@ -786,7 +979,7 @@ class FilterTestCase(BasePipelineTestCase):
                                           [0, 0, 0, 0, 0, 0, 0, 0],
                                           [0, 0, 0, 0, 0, 0, 0, 0]])
 
-        f = self.f
+        f = self.factors_by_dtype_name[dtype]
         c = self.c
 
         self.check_terms(
@@ -825,29 +1018,29 @@ class FilterTestCase(BasePipelineTestCase):
         )
 
 
+class SidFactor(CustomFactor):
+    """A factor that just returns each asset's sid."""
+    inputs = ()
+    window_length = 1
+
+    def compute(self, today, sids, out):
+        out[:] = sids
+
+
 class SpecificAssetsTestCase(WithSeededRandomPipelineEngine,
                              ZiplineTestCase):
-
     ASSET_FINDER_EQUITY_SIDS = tuple(range(10))
+    ASSET_FINDER_COUNTRY_CODE = 'US'
+    SEEDED_RANDOM_PIPELINE_DEFAULT_DOMAIN = US_EQUITIES
 
-    def test_specific_assets(self):
-        assets = self.asset_finder.retrieve_all(self.ASSET_FINDER_EQUITY_SIDS)
-
-        class SidFactor(CustomFactor):
-            """A factor that just returns each asset's sid."""
-            inputs = ()
-            window_length = 1
-
-            def compute(self, today, sids, out):
-                out[:] = sids
-
+    def _check_filters(self, evens, odds, first_five, last_three):
         pipe = Pipeline(
             columns={
                 'sid': SidFactor(),
-                'evens': StaticAssets(assets[::2]),
-                'odds': StaticAssets(assets[1::2]),
-                'first_five': StaticAssets(assets[:5]),
-                'last_three': StaticAssets(assets[-3:]),
+                'evens': evens,
+                'odds': odds,
+                'first_five': first_five,
+                'last_three': last_three,
             },
         )
 
@@ -860,6 +1053,26 @@ class SpecificAssetsTestCase(WithSeededRandomPipelineEngine,
         assert_equal(results.odds, (sids % 2).astype(bool))
         assert_equal(results.first_five, sids < 5)
         assert_equal(results.last_three, sids >= 7)
+
+    def test_specific_assets(self):
+        assets = self.asset_finder.retrieve_all(self.ASSET_FINDER_EQUITY_SIDS)
+
+        self._check_filters(
+            evens=StaticAssets(assets[::2]),
+            odds=StaticAssets(assets[1::2]),
+            first_five=StaticAssets(assets[:5]),
+            last_three=StaticAssets(assets[-3:]),
+        )
+
+    def test_specific_sids(self):
+        sids = self.ASSET_FINDER_EQUITY_SIDS
+
+        self._check_filters(
+            evens=StaticSids(sids[::2]),
+            odds=StaticSids(sids[1::2]),
+            first_five=StaticSids(sids[:5]),
+            last_three=StaticSids(sids[-3:]),
+        )
 
 
 class TestPostProcessAndToWorkSpaceValue(ZiplineTestCase):
@@ -895,3 +1108,24 @@ class TestPostProcessAndToWorkSpaceValue(ZiplineTestCase):
             f.to_workspace_value(pipeline_output, pd.Index([0, 1])),
             column_data,
         )
+
+
+class ReprTestCase(ZiplineTestCase):
+
+    def test_maximum_repr(self):
+        m = SomeFactor().top(1, groupby=SomeClassifier(), mask=SomeFilter())
+
+        rep = repr(m)
+        assert_equal(
+            rep,
+            "Maximum({}, groupby={}, mask={})".format(
+                SomeFactor().recursive_repr(),
+                SomeClassifier().recursive_repr(),
+                SomeFilter().recursive_repr(),
+            )
+        )
+
+        short_rep = m.graph_repr()
+        assert_equal(short_rep, "Maximum:\\l  "
+                                "groupby: SomeClassifier(...)\\l  "
+                                "mask: SomeFilter(...)\\l")

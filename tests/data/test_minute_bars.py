@@ -35,7 +35,7 @@ from pandas import (
     date_range,
 )
 
-from zipline.data.bar_reader import NoDataOnDate
+from zipline.data.bar_reader import NoDataForSid, NoDataOnDate
 from zipline.data.minute_bars import (
     BcolzMinuteBarMetadata,
     BcolzMinuteBarWriter,
@@ -103,6 +103,11 @@ class BcolzMinuteBarTestCase(WithTradingCalendars,
             BcolzMinuteBarMetadata.FORMAT_VERSION,
         )
 
+    def test_no_minute_bars_for_sid(self):
+        minute = self.market_opens[self.test_calendar_start]
+        with self.assertRaises(NoDataForSid):
+            self.reader.get_value(1337, minute, 'close')
+
     def test_write_one_ohlcv(self):
         minute = self.market_opens[self.test_calendar_start]
         sid = 1
@@ -136,6 +141,38 @@ class BcolzMinuteBarTestCase(WithTradingCalendars,
         volume_price = self.reader.get_value(sid, minute, 'volume')
 
         self.assertEquals(50.0, volume_price)
+
+    def test_precision_after_scaling(self):
+        '''For numbers that don't have an exact float representation,
+        assert that scaling the value does not cause a loss in precision.
+        '''
+        minute = self.market_opens[self.test_calendar_start]
+        sid = 1
+        data = DataFrame(
+            data={
+                'open': [130.23],
+                'high': [130.23],
+                'low': [130.23],
+                'close': [130.23],
+                'volume': [1000]
+            },
+            index=[minute])
+        self.writer.write_sid(sid, data)
+
+        open_price = self.reader.get_value(sid, minute, 'open')
+        self.assertEquals(130.23, open_price)
+
+        high_price = self.reader.get_value(sid, minute, 'high')
+        self.assertEquals(130.23, high_price)
+
+        low_price = self.reader.get_value(sid, minute, 'low')
+        self.assertEquals(130.23, low_price)
+
+        close_price = self.reader.get_value(sid, minute, 'close')
+        self.assertEquals(130.23, close_price)
+
+        volume_price = self.reader.get_value(sid, minute, 'volume')
+        self.assertEquals(1000, volume_price)
 
     def test_write_one_ohlcv_with_ratios(self):
         minute = self.market_opens[self.test_calendar_start]
@@ -645,7 +682,7 @@ class BcolzMinuteBarTestCase(WithTradingCalendars,
                 'close': full(9, nan),
                 'volume': full(9, 0.0),
             },
-            index=[minutes])
+            index=minutes)
         self.writer.write_sid(sid, data)
 
         fields = ['open', 'high', 'low', 'close', 'volume']
@@ -688,7 +725,7 @@ class BcolzMinuteBarTestCase(WithTradingCalendars,
                 view(float64),
                 'volume': full(9, 0.0),
             },
-            index=[minutes])
+            index=minutes)
         self.writer.write_sid(sid, data)
 
         fields = ['open', 'high', 'low', 'close', 'volume']
@@ -1129,7 +1166,7 @@ class BcolzMinuteBarTestCase(WithTradingCalendars,
                 'close': [40.0, 41.0, nan],
                 'volume': [50, 51, 0]
             },
-            index=[minutes])
+            index=minutes)
         self.writer.write_sid(sid, data)
 
         open_price = self.reader.get_value(sid, minute, 'open')

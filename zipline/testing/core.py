@@ -1,19 +1,19 @@
 from abc import ABCMeta, abstractmethod, abstractproperty
 from contextlib import contextmanager
-from functools import wraps
 import gzip
-from inspect import getargspec
 from itertools import (
     combinations,
     count,
     product,
 )
+import json
 import operator
 import os
 from os.path import abspath, dirname, join, realpath
 import shutil
-from sys import _getframe
+import sys
 import tempfile
+from traceback import format_exception
 
 from logbook import TestHandler
 from mock import patch
@@ -25,33 +25,35 @@ from six.moves import filter, map
 from sqlalchemy import create_engine
 from testfixtures import TempDirectory
 from toolz import concat, curry
+from trading_calendars import get_calendar
 
 from zipline.assets import AssetFinder, AssetDBWriter
 from zipline.assets.synthetic import make_simple_equity_info
+from zipline.utils.compat import getargspec, wraps
 from zipline.data.data_portal import DataPortal
+from zipline.data.loader import get_benchmark_filename, INDEX_MAPPING
 from zipline.data.minute_bars import (
     BcolzMinuteBarReader,
     BcolzMinuteBarWriter,
     US_EQUITIES_MINUTES_PER_DAY
 )
-from zipline.data.us_equity_pricing import (
+from zipline.data.bcolz_daily_bars import (
     BcolzDailyBarReader,
     BcolzDailyBarWriter,
-    SQLiteAdjustmentWriter,
 )
-from zipline.finance.blotter import Blotter
-from zipline.finance.trading import TradingEnvironment
+from zipline.finance.blotter import SimulationBlotter
 from zipline.finance.order import ORDER_STATUS
 from zipline.lib.labelarray import LabelArray
-from zipline.pipeline.data import USEquityPricing
+from zipline.pipeline.data import EquityPricing
+from zipline.pipeline.domain import EquitySessionDomain
 from zipline.pipeline.engine import SimplePipelineEngine
 from zipline.pipeline.factors import CustomFactor
 from zipline.pipeline.loaders.testing import make_seeded_random_loader
 from zipline.utils import security_list
-from zipline.utils.calendars import get_calendar
 from zipline.utils.input_validation import expect_dimensions
 from zipline.utils.numpy_utils import as_column, isnat
 from zipline.utils.pandas_utils import timedelta_to_integral_seconds
+from zipline.utils.paths import ensure_directory
 from zipline.utils.sentinel import sentinel
 
 import numpy as np
@@ -283,8 +285,8 @@ def chrange(start, stop):
     chars: iterable[str]
         Iterable of strings beginning with start and ending with stop.
 
-    Example
-    -------
+    Examples
+    --------
     >>> chrange('A', 'C')
     ['A', 'B', 'C']
     """
@@ -298,9 +300,7 @@ def make_trade_data_for_asset_info(dates,
                                    price_step_by_sid,
                                    volume_start,
                                    volume_step_by_date,
-                                   volume_step_by_sid,
-                                   frequency,
-                                   writer=None):
+                                   volume_step_by_sid):
     """
     Convert the asset info dataframe into a dataframe of trade data for each
     sid, and write to the writer if provided. Write NaNs for locations where
@@ -337,10 +337,6 @@ def make_trade_data_for_asset_info(dates,
             },
             index=dates,
         )
-
-        if writer:
-            writer.write_sid(sid, df)
-
         trade_data[sid] = df
 
     return trade_data
@@ -406,7 +402,7 @@ def check_arrays(x, y, err_msg='', verbose=True, check_dtypes=True):
         )
         # Fill NaTs with zero for comparison.
         x = np.where(x_isnat, np.zeros_like(x), x)
-        y = np.where(x_isnat, np.zeros_like(x), x)
+        y = np.where(y_isnat, np.zeros_like(y), y)
 
     return assert_array_equal(x, y, err_msg=err_msg, verbose=verbose)
 
@@ -541,24 +537,33 @@ def create_minute_df_for_asset(trading_calendar,
         start_dt, end_dt
     )
     minutes_count = len(asset_minutes)
-    minutes_arr = np.array(range(start_val, start_val + minutes_count))
+
+    if interval > 1:
+        minutes_arr = np.zeros(minutes_count)
+        minutes_arr[interval-1::interval] = \
+            np.arange(start_val+interval-1, start_val+minutes_count, interval)
+    else:
+        minutes_arr = np.arange(start_val, start_val + minutes_count)
+
+    open_ = minutes_arr.copy()
+    open_[interval-1::interval] += 1
+
+    high = minutes_arr.copy()
+    high[interval-1::interval] += 2
+
+    low = minutes_arr.copy()
+    low[interval - 1::interval] -= 1
 
     df = pd.DataFrame(
         {
-            "open": minutes_arr + 1,
-            "high": minutes_arr + 2,
-            "low": minutes_arr - 1,
+            "open": open_,
+            "high": high,
+            "low": low,
             "close": minutes_arr,
             "volume": 100 * minutes_arr,
         },
         index=asset_minutes,
     )
-
-    if interval > 1:
-        counter = 0
-        while counter < len(minutes_arr):
-            df[counter:(counter + interval - 1)] = 0
-            counter += interval
 
     if minute_blacklist is not None:
         for minute in minute_blacklist:
@@ -695,15 +700,12 @@ def create_data_portal_from_trade_history(asset_finder, trading_calendar,
 
 
 class FakeDataPortal(DataPortal):
-    def __init__(self, env=None, trading_calendar=None,
+    def __init__(self, asset_finder, trading_calendar=None,
                  first_trading_day=None):
-        if env is None:
-            env = TradingEnvironment()
-
         if trading_calendar is None:
             trading_calendar = get_calendar("NYSE")
 
-        super(FakeDataPortal, self).__init__(env.asset_finder,
+        super(FakeDataPortal, self).__init__(asset_finder,
                                              trading_calendar,
                                              first_trading_day)
 
@@ -713,22 +715,35 @@ class FakeDataPortal(DataPortal):
         else:
             return 1.0
 
-    def get_history_window(self, assets, end_dt, bar_count, frequency, field,
-                           ffill=True):
-        if frequency == "1d":
-            end_idx = \
-                self.trading_calendar.all_sessions.searchsorted(end_dt)
-            days = self.trading_calendar.all_sessions[
-                (end_idx - bar_count + 1):(end_idx + 1)
-            ]
+    def get_scalar_asset_spot_value(self, asset, field, dt, data_frequency):
+        if field == "volume":
+            return 100
+        else:
+            return 1.0
 
-            df = pd.DataFrame(
-                np.full((bar_count, len(assets)), 100.0),
-                index=days,
-                columns=assets
+    def get_history_window(self, assets, end_dt, bar_count, frequency, field,
+                           data_frequency, ffill=True):
+        end_idx = self.trading_calendar.all_sessions.searchsorted(end_dt)
+        days = self.trading_calendar.all_sessions[
+            (end_idx - bar_count + 1):(end_idx + 1)
+        ]
+
+        df = pd.DataFrame(
+            np.full((bar_count, len(assets)), 100.0),
+            index=days,
+            columns=assets
+        )
+
+        if frequency == "1m" and not df.empty:
+            df = df.reindex(
+                self.trading_calendar.minutes_for_sessions_in_range(
+                    df.index[0],
+                    df.index[-1],
+                ),
+                method='ffill',
             )
 
-            return df
+        return df
 
 
 class FetcherDataPortal(DataPortal):
@@ -794,6 +809,7 @@ class tmp_assets_db(object):
             )
 
         frames['equities'] = equities
+
         self._frames = frames
         self._eng = None  # set in enter and exit
 
@@ -837,12 +853,17 @@ class tmp_asset_finder(tmp_assets_db):
     def __init__(self,
                  url='sqlite:///:memory:',
                  finder_cls=AssetFinder,
+                 future_chain_predicates=None,
                  **frames):
         self._finder_cls = finder_cls
+        self._future_chain_predicates = future_chain_predicates
         super(tmp_asset_finder, self).__init__(url=url, **frames)
 
     def __enter__(self):
-        return self._finder_cls(super(tmp_asset_finder, self).__enter__())
+        return self._finder_cls(
+            super(tmp_asset_finder, self).__enter__(),
+            future_chain_predicates=self._future_chain_predicates,
+        )
 
 
 def empty_asset_finder():
@@ -857,41 +878,22 @@ def empty_asset_finder():
     return tmp_asset_finder(equities=None)
 
 
-class tmp_trading_env(tmp_asset_finder):
-    """Create a temporary trading environment.
-
-    Parameters
-    ----------
-    finder_cls : type, optional
-        The type of asset finder to create from the assets db.
-    **frames
-        Forwarded to ``tmp_assets_db``.
-
-    See Also
-    --------
-    empty_trading_env
-    tmp_asset_finder
-    """
-    def __enter__(self):
-        return TradingEnvironment(
-            asset_db_path=super(tmp_trading_env, self).__enter__().engine,
-        )
-
-
-def empty_trading_env():
-    return tmp_trading_env(equities=None)
-
-
 class SubTestFailures(AssertionError):
     def __init__(self, *failures):
         self.failures = failures
+
+    @staticmethod
+    def _format_exc(exc_info):
+        # we need to do this weird join-split-join to ensure that the full
+        # message is indented by 4 spaces
+        return '\n    '.join(''.join(format_exception(*exc_info)).splitlines())
 
     def __str__(self):
         return 'failures:\n  %s' % '\n  '.join(
             '\n    '.join((
                 ', '.join('%s=%r' % item for item in scope.items()),
-                '%s: %s' % (type(exc).__name__, exc),
-            )) for scope, exc in self.failures,
+                self._format_exc(exc_info),
+            )) for scope, exc_info in self.failures
         )
 
 
@@ -964,10 +966,11 @@ def subtest(iterator, *_names):
                 scope = tuple(scope)
                 try:
                     f(*args + scope, **kwargs)
-                except Exception as e:
+                except Exception:
+                    info = sys.exc_info()
                     if not names:
                         names = count()
-                    failures.append((dict(zip(names, scope)), e))
+                    failures.append((dict(zip(names, scope)), info))
             if failures:
                 raise SubTestFailures(*failures)
 
@@ -976,8 +979,24 @@ def subtest(iterator, *_names):
 
 
 class MockDailyBarReader(object):
+    def __init__(self, dates):
+        self.sessions = pd.DatetimeIndex(dates)
+
+    def load_raw_arrays(self, columns, start, stop, sids):
+        dates = self.sessions
+        if start < dates[0]:
+            raise ValueError('start date is out of bounds for this reader')
+        if stop > dates[-1]:
+            raise ValueError('stop date is out of bounds for this reader')
+
+        output_dates = dates[(dates >= start) & (dates <= stop)]
+        return [
+            np.full((len(output_dates), len(sids)), 100.0)
+            for _ in columns
+        ]
+
     def get_value(self, col, sid, dt):
-        return 100
+        return 100.0
 
 
 def create_mock_adjustment_data(splits=None, dividends=None, mergers=None):
@@ -997,15 +1016,6 @@ def create_mock_adjustment_data(splits=None, dividends=None, mergers=None):
         dividends = pd.DataFrame(dividends)
 
     return splits, mergers, dividends
-
-
-def create_mock_adjustments(tempdir, days, splits=None, dividends=None,
-                            mergers=None):
-    path = tempdir.getpath("test_adjustments.db")
-    SQLiteAdjustmentWriter(path, MockDailyBarReader(), days).write(
-        *create_mock_adjustment_data(splits, dividends, mergers)
-    )
-    return path
 
 
 def assert_timestamp_equal(left, right, compare_nat_equal=True, msg=""):
@@ -1092,7 +1102,52 @@ def temp_pipeline_engine(calendar, sids, random_seed, symbols=None):
         yield SimplePipelineEngine(get_loader, calendar, finder)
 
 
-def parameter_space(__fail_fast=False, **params):
+def bool_from_envvar(name, default=False, env=None):
+    """
+    Get a boolean value from the environment, making a reasonable attempt to
+    convert "truthy" values to True and "falsey" values to False.
+
+    Strings are coerced to bools using ``json.loads(s.lower())``.
+
+    Parameters
+    ----------
+    name : str
+        Name of the environment variable.
+    default : bool, optional
+        Value to use if the environment variable isn't set. Default is False
+    env : dict-like, optional
+        Mapping in which to look up ``name``. This is a parameter primarily for
+        testing purposes. Default is os.environ.
+
+    Returns
+    -------
+    value : bool
+        ``env[name]`` coerced to a boolean, or ``default`` if ``name`` is not
+        in ``env``.
+    """
+    if env is None:
+        env = os.environ
+
+    value = env.get(name)
+    if value is None:
+        return default
+
+    try:
+        # Try to parse as JSON. This makes strings like "0", "False", and
+        # "null" evaluate as falsey values.
+        value = json.loads(value.lower())
+    except ValueError:
+        # If the value can't be parsed as json, assume it should be treated as
+        # a string for the purpose of evaluation.
+        pass
+
+    return bool(value)
+
+
+_FAIL_FAST_DEFAULT = bool_from_envvar('PARAMETER_SPACE_FAIL_FAST')
+
+
+def parameter_space(__fail_fast=_FAIL_FAST_DEFAULT, **params):
     """
     Wrapper around subtest that allows passing keywords mapping names to
     iterables of values.
@@ -1100,8 +1155,8 @@ def parameter_space(__fail_fast=False, **params):
     The decorated test function will be called with the cross-product of all
     possible inputs
 
-    Usage
-    -----
+    Examples
+    --------
     >>> from unittest import TestCase
     >>> class SomeTestCase(TestCase):
     ...     @parameter_space(x=[1, 2], y=[2, 3])
@@ -1139,21 +1194,29 @@ def parameter_space(__fail_fast=False, **params):
         if unspecified:
             raise AssertionError(
                 "Function arguments %s were not "
-                "supplied to parameter_space()." % extra
+                "supplied to parameter_space()." % unspecified
             )
 
-        make_param_sets = lambda: product(*(params[name] for name in argnames))
+        def make_param_sets():
+            return product(*(params[name] for name in argnames))
+
+        def clean_f(self, *args, **kwargs):
+            try:
+                f(self, *args, **kwargs)
+            finally:
+                self.tearDown()
+                self.setUp()
 
         if __fail_fast:
             @wraps(f)
             def wrapped(self):
                 for args in make_param_sets():
-                    f(self, *args)
+                    clean_f(self, *args)
             return wrapped
         else:
             @wraps(f)
             def wrapped(*args, **kwargs):
-                subtest(make_param_sets(), *argnames)(f)(*args, **kwargs)
+                subtest(make_param_sets(), *argnames)(clean_f)(*args, **kwargs)
 
         return wrapped
 
@@ -1362,8 +1425,7 @@ class _TmpBarReader(with_metaclass(ABCMeta, tmp_dir)):
 
     Parameters
     ----------
-    env : TradingEnvironment
-        The trading env.
+
     days : pd.DatetimeIndex
         The days to write for.
     data : dict[int -> pd.DataFrame]
@@ -1377,27 +1439,26 @@ class _TmpBarReader(with_metaclass(ABCMeta, tmp_dir)):
         raise NotImplementedError('_reader')
 
     @abstractmethod
-    def _write(self, env, days, path, data):
+    def _write(self, cal, days, path, data):
         raise NotImplementedError('_write')
 
-    def __init__(self, env, days, data, path=None):
+    def __init__(self, cal, days, data, path=None):
         super(_TmpBarReader, self).__init__(path=path)
-        self._env = env
+        self._cal = cal
         self._days = days
         self._data = data
 
     def __enter__(self):
         tmpdir = super(_TmpBarReader, self).__enter__()
-        env = self._env
         try:
             self._write(
-                env,
+                self._cal,
                 self._days,
                 tmpdir.path,
                 self._data,
             )
             return self._reader_cls(tmpdir.path)
-        except:
+        except BaseException:  # Clean up even on KeyboardInterrupt
             self.__exit__(None, None, None)
             raise
 
@@ -1407,8 +1468,8 @@ class tmp_bcolz_equity_minute_bar_reader(_TmpBarReader):
 
     Parameters
     ----------
-    env : TradingEnvironment
-        The trading env.
+    cal : TradingCalendar
+        The trading calendar for which we're writing data.
     days : pd.DatetimeIndex
         The days to write for.
     data : iterable[(int, pd.DataFrame)]
@@ -1430,8 +1491,8 @@ class tmp_bcolz_equity_daily_bar_reader(_TmpBarReader):
 
     Parameters
     ----------
-    env : TradingEnvironment
-        The trading env.
+    cal : TradingCalendar
+        The trading calendar for which we're writing data.
     days : pd.DatetimeIndex
         The days to write for.
     data : dict[int -> pd.DataFrame]
@@ -1447,7 +1508,7 @@ class tmp_bcolz_equity_daily_bar_reader(_TmpBarReader):
     _reader_cls = BcolzDailyBarReader
 
     @staticmethod
-    def _write(env, days, path, data):
+    def _write(cal, days, path, data):
         BcolzDailyBarWriter(path, days).write(data)
 
 
@@ -1485,6 +1546,19 @@ def patch_read_csv(url_map, module=pd, strict=False):
         yield
 
 
+def copy_market_data(src_market_data_dir, dest_root_dir):
+    symbol = 'SPY'
+    filenames = (get_benchmark_filename(symbol), INDEX_MAPPING[symbol][1])
+
+    ensure_directory(os.path.join(dest_root_dir, 'data'))
+
+    for filename in filenames:
+        shutil.copyfile(
+            os.path.join(src_market_data_dir, filename),
+            os.path.join(dest_root_dir, 'data', filename)
+        )
+
+
 @curry
 def ensure_doctest(f, name=None):
     """Ensure that an object gets doctested. This is useful for instances
@@ -1503,29 +1577,23 @@ def ensure_doctest(f, name=None):
     f : any
        ``f`` unchanged.
     """
-    _getframe(2).f_globals.setdefault('__test__', {})[
+    sys._getframe(2).f_globals.setdefault('__test__', {})[
         f.__name__ if name is None else name
     ] = f
     return f
 
 
-class RecordBatchBlotter(Blotter):
+class RecordBatchBlotter(SimulationBlotter):
     """Blotter that tracks how its batch_order method was called.
     """
-    def __init__(self, data_frequency, asset_finder):
-        super(RecordBatchBlotter, self).__init__(
-            data_frequency, asset_finder,
-        )
+    def __init__(self):
+        super(RecordBatchBlotter, self).__init__()
         self.order_batch_called = []
 
     def batch_order(self, *args, **kwargs):
         self.order_batch_called.append((args, kwargs))
         return super(RecordBatchBlotter, self).batch_order(*args, **kwargs)
 
-
-####################################
-# Shared factors for pipeline tests.
-####################################
 
 class AssetID(CustomFactor):
     """
@@ -1551,7 +1619,188 @@ class AssetIDPlusDay(CustomFactor):
 
 class OpenPrice(CustomFactor):
     window_length = 1
-    inputs = [USEquityPricing.open]
+    inputs = [EquityPricing.open]
 
     def compute(self, today, assets, out, open):
         out[:] = open
+
+
+def prices_generating_returns(returns, starting_price):
+    """Construct the time series of prices that produce the given returns.
+
+    Parameters
+    ----------
+    returns : np.ndarray[float]
+        The returns that these prices generate.
+    starting_price : float
+        The value of the asset.
+
+    Returns
+    -------
+    prices : np.ndaray[float]
+        The prices that generate the given returns. This array will be one
+        element longer than ``returns`` and ``prices[0] == starting_price``.
+    """
+    raw_prices = starting_price * (1 + np.append([0], returns)).cumprod()
+    rounded_prices = raw_prices.round(3)
+
+    if not np.allclose(raw_prices, rounded_prices):
+        raise ValueError(
+            'Prices only have 3 decimal places of precision. There is no valid'
+            ' price series that generate these returns.',
+        )
+
+    return rounded_prices
+
+
+def random_tick_prices(starting_price,
+                       count,
+                       tick_size=0.01,
+                       tick_range=(-5, 7),
+                       seed=42):
+    """
+    Construct a time series of prices that ticks by a random multiple of
+    ``tick_size`` every period.
+
+    Parameters
+    ----------
+    starting_price : float
+        The first price of the series.
+    count : int
+        Number of price observations to return.
+    tick_size : float
+        Unit of price movement between observations.
+    tick_range : (int, int)
+        Pair of lower/upper bounds for different in the number of ticks
+        between price observations.
+    seed : int, optional
+        Seed to use for random number generation.
+    """
+    out = np.full(count, starting_price, dtype=float)
+    rng = np.random.RandomState(seed)
+    diff = rng.randint(tick_range[0], tick_range[1], size=len(out) - 1)
+    ticks = starting_price + diff.cumsum() * tick_size
+    out[1:] = ticks
+    return out
+
+
+def simulate_minutes_for_day(open_,
+                             high,
+                             low,
+                             close,
+                             volume,
+                             trading_minutes=390,
+                             random_state=None):
+    """Generate a random walk of minute returns which meets the given OHLCV
+    profile for an asset. The volume will be evenly distributed through the
+    day.
+
+    Parameters
+    ----------
+    open_ : float
+        The day's open.
+    high : float
+        The day's high.
+    low : float
+        The day's low.
+    close : float
+        The day's close.
+    volume : float
+        The day's volume.
+    trading_minutes : int, optional
+        The number of minutes to simulate.
+    random_state : numpy.random.RandomState, optional
+        The random state to use. If not provided, the global numpy state is
+        used.
+    """
+    if random_state is None:
+        random_state = np.random
+
+    sub_periods = 5
+
+    values = (random_state.rand(trading_minutes * sub_periods) - 0.5).cumsum()
+    values *= (high - low) / (values.max() - values.min())
+    values += np.linspace(
+        open_ - values[0],
+        close - values[-1],
+        len(values),
+    )
+    assert np.allclose(open_, values[0])
+    assert np.allclose(close, values[-1])
+
+    max_ = max(close, open_)
+    where = values > max_
+    values[where] = (
+        (values[where] - max_) *
+        (high - max_) /
+        (values.max() - max_) +
+        max_
+    )
+
+    min_ = min(close, open_)
+    where = values < min_
+    values[where] = (
+        (values[where] - min_) *
+        (low - min_) /
+        (values.min() - min_) +
+        min_
+    )
+
+    if not (np.allclose(values.max(), high) and
+            np.allclose(values.min(), low)):
+        return simulate_minutes_for_day(
+            open_,
+            high,
+            low,
+            close,
+            volume,
+            trading_minutes,
+            random_state=random_state,
+        )
+
+    prices = pd.Series(values.round(3)).groupby(
+        np.arange(trading_minutes).repeat(sub_periods),
+    )
+
+    base_volume, remainder = divmod(volume, trading_minutes)
+    volume = np.full(trading_minutes, base_volume, dtype='int64')
+    volume[:remainder] += 1
+
+    # TODO: add in volume
+    return pd.DataFrame({
+        'open': prices.first(),
+        'close': prices.last(),
+        'high': prices.max(),
+        'low': prices.min(),
+        'volume': volume,
+    })
+
+
+def create_simple_domain(start, end, country_code):
+    """Create a new pipeline domain with a simple date_range index.
+    """
+    return EquitySessionDomain(pd.date_range(start, end), country_code)
+
+
+def write_hdf5_daily_bars(writer,
+                          asset_finder,
+                          country_codes,
+                          generate_data):
+    """Write an HDF5 file of pricing data using an HDF5DailyBarWriter.
+    """
+    asset_finder = asset_finder
+    for country_code in country_codes:
+        sids = asset_finder.equities_sids_for_country_code(country_code)
+        data_generator = generate_data(country_code=country_code, sids=sids)
+        writer.write_from_sid_df_pairs(country_code, data_generator)
+
+
+def exchange_info_for_domains(domains):
+    """
+    Build an exchange_info suitable for passing to an AssetFinder from a list
+    of EquityCalendarDomain.
+    """
+    return pd.DataFrame.from_records([
+        {'exchange': domain.calendar.name, 'country_code': domain.country_code}
+        for domain in domains
+    ])

@@ -82,6 +82,17 @@ Please use VolumeShareSlippage or FixedSlippage.
 """.strip()
 
 
+class IncompatibleSlippageModel(ZiplineError):
+    """
+    Raised if a user tries to set a futures slippage model for equities or vice
+    versa.
+    """
+    msg = """
+You attempted to set an incompatible slippage model for {asset_type}. \
+The slippage model '{given_model}' only supports {supported_asset_types}.
+""".strip()
+
+
 class SetSlippagePostInit(ZiplineError):
     # Raised if a users script calls set_slippage magic
     # after the initialize method has returned.
@@ -127,6 +138,17 @@ class UnsupportedCommissionModel(ZiplineError):
     msg = """
 You attempted to set commission with an unsupported class. \
 Please use PerShare or PerTrade.
+""".strip()
+
+
+class IncompatibleCommissionModel(ZiplineError):
+    """
+    Raised if a user tries to set a futures commission model for equities or
+    vice versa.
+    """
+    msg = """
+You attempted to set an incompatible commission model for {asset_type}. \
+The commission model '{given_model}' only supports {supported_asset_types}.
 """.strip()
 
 
@@ -227,6 +249,13 @@ class SetBenchmarkOutsideInitialize(ZiplineError):
     msg = "'set_benchmark' can only be called within initialize function."
 
 
+class ZeroCapitalError(ZiplineError):
+    """
+    Raised if initial capital is set at or below zero
+    """
+    msg = "initial capital base must be greater than zero"
+
+
 class AccountControlViolation(ZiplineError):
     """
     Raised if the account violates a constraint set by a AccountControl.
@@ -286,6 +315,33 @@ Possible options: {options}
     """.strip()
 
 
+class MultipleSymbolsFoundForFuzzySymbol(MultipleSymbolsFound):
+    """
+    Raised when a fuzzy symbol lookup is not resolvable without additional
+    information.
+    """
+    msg = dedent("""\
+        Multiple symbols were found fuzzy matching the name '{symbol}'. Use
+        the as_of_date and/or country_code arguments to to specify the date
+        and country for the symbol-lookup.
+
+        Possible options: {options}
+    """)
+
+
+class SameSymbolUsedAcrossCountries(MultipleSymbolsFound):
+    """
+    Raised when a symbol() call contains a symbol that is used in more than
+    one country and is thus not resolvable without a country_code.
+    """
+    msg = dedent("""\
+        The symbol '{symbol}' is used in more than one country. Use the
+        country_code argument to to specify the country.
+
+        Possible options by country: {options}
+    """)
+
+
 class SymbolNotFound(ZiplineError):
     """
     Raised when a symbol() call contains a non-existant symbol.
@@ -323,7 +379,8 @@ class MultipleValuesFoundForField(ZiplineError):
     """
     msg = """
 Multiple occurrences of the value '{value}' found for field '{field}'.
-Use the as_of_date' argument to specify when the lookup should be valid.
+Use the 'as_of_date' or 'country_code' argument to specify when or where the
+lookup should be valid.
 
 Possible options: {options}
     """.strip()
@@ -406,17 +463,6 @@ must contain both or one of 'sid' or 'symbol'.
 """.strip()
 
 
-class MapAssetIdentifierIndexError(ZiplineError):
-    """
-    Raised when AssetMetaData.map_identifier_index_to_sids() is called on an
-    index of invalid objects.
-    """
-    msg = """
-AssetFinder can not map an index with values of type {obj}. Asset indices of
-DataFrames or Panels must be integer sids, string symbols, or Asset objects.
-""".strip()
-
-
 class SidAssignmentError(ZiplineError):
     """
     Raised when an AssetFinder tries to build an Asset that does not have a sid
@@ -488,6 +534,26 @@ class TermInputsNotSpecified(ZiplineError):
     that term does not have class-level default inputs.
     """
     msg = "{termname} requires inputs, but no inputs list was passed."
+
+
+class NonPipelineInputs(ZiplineError):
+    """
+    Raised when a non-pipeline object is passed as input to a ComputableTerm
+    """
+    def __init__(self, term, inputs):
+        self.term = term
+        self.inputs = inputs
+
+    def __str__(self):
+        return (
+            "Unexpected input types in {}. "
+            "Inputs to Pipeline expressions must be Filters, Factors, "
+            "Classifiers, or BoundColumns.\n"
+            "Got the following type(s) instead: {}".format(
+                type(self.term).__name__,
+                sorted(set(map(type, self.inputs)), key=lambda t: t.__name__),
+            )
+        )
 
 
 class TermOutputsEmpty(ZiplineError):
@@ -617,11 +683,29 @@ class NoSuchPipeline(ZiplineError, KeyError):
     )
 
 
+class DuplicatePipelineName(ZiplineError):
+    """
+    Raised when a user tries to attach a pipeline with a name that already
+    exists for another attached pipeline.
+    """
+    msg = (
+        "Attempted to attach pipeline named {name!r}, but the name already "
+        "exists for another pipeline. Please use a different name for this "
+        "pipeline."
+    )
+
+
 class UnsupportedDataType(ZiplineError):
     """
     Raised by CustomFactors with unsupported dtypes.
     """
-    msg = "{typename} instances with dtype {dtype} are not supported."
+    def __init__(self, hint='', **kwargs):
+        if hint:
+            hint = ' ' + hint
+        kwargs['hint'] = hint
+        super(UnsupportedDataType, self).__init__(**kwargs)
+
+    msg = "{typename} instances with dtype {dtype} are not supported.{hint}"
 
 
 class NoFurtherDataError(ZiplineError):
@@ -663,18 +747,6 @@ class UnsupportedDatetimeFormat(ZiplineError):
     """
     msg = ("The input '{input}' passed to '{method}' is not "
            "coercible to a pandas.Timestamp object.")
-
-
-class PositionTrackerMissingAssetFinder(ZiplineError):
-    """
-    Raised by a PositionTracker if it is asked to update an Asset but does not
-    have an AssetFinder
-    """
-    msg = (
-        "PositionTracker attempted to update its Asset information but does "
-        "not have an AssetFinder. This may be caused by a failure to properly "
-        "de-serialize a TradingAlgorithm."
-    )
 
 
 class AssetDBVersionError(ZiplineError):
@@ -745,6 +817,16 @@ class ScheduleFunctionWithoutCalendar(ZiplineError):
     msg = (
         "To use schedule_function, the TradingAlgorithm must be running on an "
         "ExchangeTradingSchedule, rather than {schedule}."
+    )
+
+
+class ScheduleFunctionInvalidCalendar(ZiplineError):
+    """
+    Raised when schedule_function is called with an invalid calendar argument.
+    """
+    msg = (
+        "Invalid calendar '{given_calendar}' passed to schedule_function. "
+        "Allowed options are {allowed_calendars}."
     )
 
 

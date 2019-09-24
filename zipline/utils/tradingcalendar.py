@@ -23,8 +23,8 @@ from functools import partial
 # from zipline.zipline_warnings import ZiplineDeprecationWarning
 
 # IMPORTANT: This module is deprecated and is only here for temporary backwards
-# compatibility.  Look at the `zipline.utils.calendars.trading_schedule`
-# module, as well as the calendar definitions in `zipline.utils.calendars`.
+# compatibility.  Look at the `trading-calendars`
+# module, as well as the calendar definitions in `trading_calendars`.
 
 # TODO: The new calendar API is currently in flux, so the deprecation
 #       warning for this module is currently disabled. Re-enable once
@@ -32,8 +32,8 @@ from functools import partial
 #
 # warnings.warn(
 #     "The `tradingcalendar` module is deprecated. See the "
-#     "`zipline.utils.calendars.trading_schedule` module,  as well as the "
-#     "calendar definitions in `zipline.utils.calendars`.",
+#     "`trading-calendars` module,  as well as the "
+#     "calendar definitions in `trading-calendars`.",
 #     category=ZiplineDeprecationWarning,
 #     stacklevel=1,
 # )
@@ -266,6 +266,7 @@ def get_non_trading_days(start, end):
     non_trading_days.sort()
     return pd.DatetimeIndex(non_trading_days)
 
+
 non_trading_days = get_non_trading_days(start, end)
 trading_day = pd.tseries.offsets.CDay(holidays=non_trading_days)
 
@@ -274,6 +275,7 @@ def get_trading_days(start, end, trading_day=trading_day):
     return pd.date_range(start=start.date(),
                          end=end.date(),
                          freq=trading_day).tz_localize('UTC')
+
 
 trading_days = get_trading_days(start, end)
 
@@ -384,6 +386,7 @@ def get_early_closes(start, end):
     early_closes.sort()
     return pd.DatetimeIndex(early_closes)
 
+
 early_closes = get_early_closes(start, end)
 
 
@@ -419,6 +422,7 @@ def get_open_and_closes(trading_days, early_closes, get_open_and_close):
         zip(*open_and_closes.index.map(get_o_and_c))
 
     return open_and_closes
+
 
 open_and_closes = get_open_and_closes(trading_days, early_closes,
                                       get_open_and_close)

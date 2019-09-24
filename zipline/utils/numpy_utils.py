@@ -3,6 +3,7 @@ Utilities for working with numpy arrays.
 """
 from collections import OrderedDict
 from datetime import datetime
+from distutils.version import StrictVersion
 from warnings import (
     catch_warnings,
     filterwarnings,
@@ -10,6 +11,7 @@ from warnings import (
 
 import numpy as np
 from numpy import (
+    array_equal,
     broadcast,
     busday_count,
     datetime64,
@@ -26,9 +28,13 @@ from numpy import (
 from numpy.lib.stride_tricks import as_strided
 from toolz import flip
 
+numpy_version = StrictVersion(np.__version__)
+
 uint8_dtype = dtype('uint8')
 bool_dtype = dtype('bool')
 
+uint32_dtype = dtype('uint32')
+uint64_dtype = dtype('uint64')
 int64_dtype = dtype('int64')
 
 float32_dtype = dtype('float32')
@@ -321,7 +327,7 @@ def rolling_window(array, length):
 
 # Sentinel value that isn't NaT.
 _notNaT = make_datetime64D(0)
-iNaT = NaTns.view(int64_dtype)
+iNaT = int(NaTns.view(int64_dtype))
 assert iNaT == NaTD.view(int64_dtype), "iNaTns != iNaTD"
 
 
@@ -488,3 +494,11 @@ def changed_locations(a, include_first):
         return indices
 
     return hstack([[0], indices])
+
+
+def compare_datetime_arrays(x, y):
+    """
+    Compare datetime64 ndarrays, treating NaT values as equal.
+    """
+
+    return array_equal(x.view('int64'), y.view('int64'))

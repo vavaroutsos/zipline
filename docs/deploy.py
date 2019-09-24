@@ -2,7 +2,6 @@
 from __future__ import print_function
 from contextlib import contextmanager
 from glob import glob
-from path import path
 import os
 from os.path import abspath, basename, dirname, exists, isfile
 from shutil import move, rmtree
@@ -32,8 +31,13 @@ def ensure_not_exists(path):
 
 
 def main():
+    old_dir = os.getcwd()
     print("Moving to %s." % HERE)
-    with path(HERE):
+    os.chdir(HERE)
+
+    try:
+        print("Cleaning docs with 'make clean'")
+        check_call(['make', 'clean'])
         print("Building docs with 'make html'")
         check_call(['make', 'html'])
 
@@ -64,10 +68,13 @@ def main():
                 print("%s -> %s" % (file_, base))
                 ensure_not_exists(base)
                 move(file_, '.')
+    finally:
+        os.chdir(old_dir)
 
     print()
     print("Updated documentation branch in directory %s" % ZIPLINE_ROOT)
     print("If you are happy with these changes, commit and push to gh-pages.")
+
 
 if __name__ == '__main__':
     main()
